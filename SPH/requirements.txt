@@ -1,0 +1,5 @@
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+numba>=0.58   # optional: the code falls back to interpreted loops without it
+pillow>=9.0   # GIF writer for the animation
