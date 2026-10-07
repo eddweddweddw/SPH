@@ -1,0 +1,6 @@
+# Outputs written by make_ic.py and run_sph.py in the working directory
+disc_ic.npz
+/*.png
+/*.gif
+__pycache__/
+.pytest_cache/

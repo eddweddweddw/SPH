@@ -252,10 +252,20 @@ def choose_dt(h, cs, acc, visc_max):
 
 
 def apply_sink(pos, vel, m, h):
-    """Remove particles that cross the inner boundary."""
+    """Remove particles that cross the inner boundary.
+
+    Also returns the angular momentum and energy the removed particles carry,
+    so that the budget of disc + accreted material can be checked.
+    """
     R2 = np.sum(pos * pos, axis=1)
     keep = R2 > R_SINK ** 2
-    return pos[keep], vel[keep], m[keep], h[keep], np.sum(~keep)
+    gone = ~keep
+    if gone.any():
+        d = disc_diagnostics(pos[gone], vel[gone], m[gone])
+        Lz_gone, E_gone = d["Lz"], d["Etot"]
+    else:
+        Lz_gone, E_gone = 0.0, 0.0
+    return pos[keep], vel[keep], m[keep], h[keep], Lz_gone, E_gone
 
 
 def disc_diagnostics(pos, vel, m):
@@ -315,8 +325,9 @@ def integrate(pos, vel, m, h):
     nn0 = count_neighbours(pos, h, pair_i, pair_j, DIM)
     snapshots.append(dict(t=0.0, pos=pos.copy(), vel=vel.copy(),
                           rho=rho.copy(), h=h.copy(), n_neigh=nn0.copy()))
+    Lz_acc, E_acc = 0.0, 0.0           # carried away by the sink so far
     diag_t.append(0.0)
-    diag_data.append(disc_diagnostics(pos, vel, m))
+    diag_data.append(dict(disc_diagnostics(pos, vel, m), Lz_acc=Lz_acc, E_acc=E_acc))
 
     t, step, t_next_snap = 0.0, 0, SNAP_EVERY
     t0 = time.time()
@@ -327,7 +338,9 @@ def integrate(pos, vel, m, h):
 
         vel += 0.5 * dt * acc                                  # first kick
         pos += dt * vel                                        # drift
-        pos, vel, m, h, _ = apply_sink(pos, vel, m, h)
+        pos, vel, m, h, Lz_gone, E_gone = apply_sink(pos, vel, m, h)
+        Lz_acc += Lz_gone
+        E_acc += E_gone
 
         R = np.sqrt(np.sum(pos * pos, axis=1))
         cs = sound_speed(R)
@@ -348,7 +361,8 @@ def integrate(pos, vel, m, h):
             snapshots.append(dict(t=t, pos=pos.copy(), vel=vel.copy(),
                                   rho=rho.copy(), h=h.copy(), n_neigh=nn))
             diag_t.append(t)
-            diag_data.append(disc_diagnostics(pos, vel, m))
+            diag_data.append(dict(disc_diagnostics(pos, vel, m),
+                                  Lz_acc=Lz_acc, E_acc=E_acc))
             t_next_snap += SNAP_EVERY
 
     elapsed = time.time() - t0
@@ -463,22 +477,27 @@ def plot_density_diagnostics(snapshots, m, fname="sph_density_diagnostics.png"):
 # ------------------------------------------------- conservation diagnostics
 
 def plot_conservation(diag_t, diag_data, fname="sph_energy_angmom.png"):
-    Etot = np.array([d["Etot"] for d in diag_data])
-    Lz = np.array([d["Lz"] for d in diag_data])
-    Mtot = np.array([d["Mtot"] for d in diag_data])
-    Ekin = np.array([d["Ekin"] for d in diag_data])
-    Egrav = np.array([d["Egrav"] for d in diag_data])
-    Etherm = np.array([d["Etherm"] for d in diag_data])
+    """Energy and angular momentum of the disc, alone and with what the sink took.
+
+    Every force in the code is central and pairwise antisymmetric, so L_z can
+    only leave the disc through the sink: disc + accreted must stay constant to
+    round-off. Energy is not conserved even with the accreted part added back,
+    because the locally isothermal gas radiates the heat produced by viscosity.
+    """
+    get = lambda k: np.array([d[k] for d in diag_data])
+    Ekin, Egrav, Etherm, Etot = get("Ekin"), get("Egrav"), get("Etherm"), get("Etot")
+    Lz, Mtot, Lz_acc, E_acc = get("Lz"), get("Mtot"), get("Lz_acc"), get("E_acc")
+    Lz_all = Lz + Lz_acc
     Etot_spec = Etot / Mtot
-    Lz_spec = Lz / Mtot
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 8))
     axes[0, 0].plot(diag_t, Ekin, label="kinetic")
     axes[0, 0].plot(diag_t, Egrav, label="gravitational")
     axes[0, 0].plot(diag_t, Etherm, label="thermal")
     axes[0, 0].plot(diag_t, Etot, "k-", lw=2, label="total")
+    axes[0, 0].plot(diag_t, Etot + E_acc, "k--", lw=1.5, label="total + accreted")
     axes[0, 0].set_xlabel("t [yr]")
-    axes[0, 0].set_ylabel("E")
+    axes[0, 0].set_ylabel(r"E [Msun AU$^2$ yr$^{-2}$]")
     axes[0, 0].set_title("Energy budget")
     axes[0, 0].legend()
     axes[0, 0].grid(alpha=0.3)
@@ -490,20 +509,19 @@ def plot_conservation(diag_t, diag_data, fname="sph_energy_angmom.png"):
     axes[0, 1].set_title("Specific energy drift")
     axes[0, 1].grid(alpha=0.3)
 
-    axes[1, 0].plot(diag_t, Lz, "b-", label=r"total $L_z$")
-    axes[1, 0].plot(diag_t, Mtot * Lz_spec[0], "b--", alpha=0.5,
-                    label="expected from mass loss alone")
+    axes[1, 0].plot(diag_t, Lz, "b-", label="disc")
+    axes[1, 0].plot(diag_t, Lz_all, "b--", label="disc + accreted")
     axes[1, 0].set_xlabel("t [yr]")
-    axes[1, 0].set_ylabel(r"$L_z$")
-    axes[1, 0].set_title("Total angular momentum")
+    axes[1, 0].set_ylabel(r"$L_z$ [Msun AU$^2$ yr$^{-1}$]")
+    axes[1, 0].set_title("Angular momentum")
     axes[1, 0].legend()
     axes[1, 0].grid(alpha=0.3)
 
-    axes[1, 1].plot(diag_t, Lz_spec / Lz_spec[0] - 1, "b-")
+    axes[1, 1].plot(diag_t, Lz_all / Lz_all[0] - 1, "b-")
     axes[1, 1].axhline(0, color="gray", ls=":", lw=0.7)
     axes[1, 1].set_xlabel("t [yr]")
-    axes[1, 1].set_ylabel(r"$\Delta L_{z,\rm spec}/L_{z,\rm spec}(0)$")
-    axes[1, 1].set_title("Specific angular momentum drift")
+    axes[1, 1].set_ylabel(r"$\Delta L_z / L_z(0)$, disc + accreted")
+    axes[1, 1].set_title("Angular momentum conservation")
     axes[1, 1].grid(alpha=0.3)
 
     fig.tight_layout()
@@ -511,9 +529,10 @@ def plot_conservation(diag_t, diag_data, fname="sph_energy_angmom.png"):
     plt.close(fig)
     print(f"  Written to {fname}")
 
-    print("\nFinal relative drift:")
-    print(f"  specific energy:            {(Etot_spec[-1] / Etot_spec[0] - 1):+.3e}")
-    print(f"  specific angular momentum:  {(Lz_spec[-1] / Lz_spec[0] - 1):+.3e}")
+    print("\nFinal relative change:")
+    print(f"  L_z, disc + accreted:       {(Lz_all[-1] / Lz_all[0] - 1):+.3e}")
+    print(f"  E,   disc + accreted:       {((Etot[-1] + E_acc[-1]) / Etot[0] - 1):+.3e}")
+    print(f"  specific energy of disc:    {(Etot_spec[-1] / Etot_spec[0] - 1):+.3e}")
     print(f"  mass accreted by the sink:  {(1 - Mtot[-1] / Mtot[0]) * 100:.2f}%")
 
 

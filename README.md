@@ -7,7 +7,10 @@ time integrator are all implemented here, with no SPH library underneath.
 Built as the computational project for the *Problem Solving* course at IUSS
 Pavia, alongside a master's thesis on protoplanetary disc kinematics.
 
-![Disc evolution](figures/sph_disc_evolution.gif)
+![Viscous spreading of a ring](figures/ring_evolution.gif)
+
+*A ring of 1000 particles at 200 AU spreading under pressure and viscosity over
+5000 years, coloured by log density. Particles inside 30 AU are accreted by the sink.*
 
 ## The physical system
 
@@ -46,35 +49,51 @@ results.
 
 ## Validation
 
-Two checks, both produced by the run:
+All numbers below come from the default configuration (N = 1000, 5000 years)
+and are printed at the end of every run. A run takes about 50 s on a laptop
+with `numba`.
 
-**Angular momentum.** With the sink effectively disabled, specific L<sub>z</sub>
-is conserved to machine precision. With an active sink the total drops, and the
-run reports it against the drop expected from mass loss alone, so accretion and
-numerical error can be told apart. This distinction matters: in a configuration
-where the sink swallows a large fraction of the disc, the raw totals stop being
-useful diagnostics and only the specific quantities mean anything.
+| Check | Ring | Self-similar (LBP) |
+|---|---|---|
+| Angular momentum, disc + accreted, relative change | ~10⁻¹⁶ (round-off) | ~10⁻¹⁶ (round-off) |
+| Mass accreted by the sink | 2.1% | 18.8% |
+| Total energy, disc + accreted | −12% | −35% |
 
-**Energy.** Specific energy drifts slightly. The drift is expected and has two
-identified sources: adaptive smoothing lengths without grad-h correction terms,
-and the adaptive timestep, which breaks the symplectic property of leapfrog.
+**Angular momentum.** Every force in the code is central and pairwise
+antisymmetric, so L<sub>z</sub> can only leave the disc through the sink. The code
+records what each accreted particle carries away; the sum of disc and accreted
+material is then conserved to machine precision, while the disc alone loses
+exactly what the sink takes. The unit tests check the antisymmetry directly:
+the SPH forces on a random particle set exert no net force and no net torque.
 
-**Surface density.** For the LBP initial conditions, Σ(R) is compared against the
-analytic profile, normalised to carry the same mass over the plotted range so the
-comparison is like for like.
+![Conservation diagnostics, ring](figures/ring_sph_energy_angmom.png)
 
-![Conservation diagnostics](figures/sph_energy_angmom.png)
+**Energy.** Energy is not conserved, and should not be: the gas is locally
+isothermal, so the heat produced by viscosity and compression is radiated
+immediately. Adding back the accreted material, the total decreases by the
+energy the gas loses while it moves inwards, the accretion luminosity of a real
+disc. Smaller contributions come from the adaptive smoothing length without
+grad-h terms and from the adaptive timestep, which breaks the symplectic
+property of leapfrog.
+
+**Surface density.** For the LBP initial conditions, Σ(R) is compared against
+the analytic profile, normalised to carry the same mass over the plotted range.
+Between 100 and 500 AU the disc keeps its self-similar shape; the two edges move
+for the reasons listed under *Known limitations*.
+
+![Density diagnostics, self-similar disc](figures/lbp_sph_density_diagnostics.png)
 
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-python make_ic.py      # samples the particles -> disc_ic.npz
-python run_sph.py      # integrates and writes the figures
+python make_ic.py ring   # or: lbp. Samples the particles -> disc_ic.npz
+python run_sph.py        # integrates and writes the figures
+pytest tests             # kernel and force-symmetry checks
 ```
 
 Parameters live in a configuration block at the top of each file. `make_ic.py`
-controls the profile, particle number and disc mass; `run_sph.py` controls the
+controls the particle number and disc mass; `run_sph.py` controls the
 viscosity coefficients, timestep safety factors, sink radius and integration
 time.
 
@@ -89,6 +108,12 @@ Outputs:
 
 ## Known limitations
 
+- Edges: a particle at the edge of the disc has neighbours on one side only, so
+  its density is underestimated and the unbalanced pressure pushes the edges
+  outwards (and the inner one into the sink).
+- Resolution: with 1000 particles the smoothing length is comparable to the
+  scale height, so the effective viscosity corresponds to α ≈ 0.1–0.2, well
+  above real discs, and the disc evolves faster than it would.
 - No self-gravity: the disc mass enters the initial conditions but not the force
   calculation.
 - No grad-h correction terms, which is the main source of the energy drift.

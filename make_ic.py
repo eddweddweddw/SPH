@@ -8,6 +8,8 @@ azimuthal velocity consistent with that profile, and writes the state to
 Units: distances in AU, masses in Msun, time in years, so that G = 4 pi^2.
 """
 
+import sys
+
 import numpy as np
 from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
@@ -15,8 +17,10 @@ import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------- configuration
 
-PROFILE = "ring"        # "lbp"  -> Lynden-Bell & Pringle self-similar disc
-                        # "ring" -> thin ring centred on R_ring
+# "lbp"  -> Lynden-Bell & Pringle self-similar disc
+# "ring" -> thin ring centred on R_ring
+# Overridable from the command line: python make_ic.py lbp
+PROFILE = sys.argv[1] if len(sys.argv) > 1 else "ring"
 
 # Shared parameters
 Mstar = 1.0             # stellar mass                    [Msun]
